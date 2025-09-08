@@ -42,6 +42,7 @@
 #define VM_TOTAL_PAD_PAGES	((1ULL << VM_PAD_WIDTH) - 1)
 #define VM_PAD_MASK		(VM_TOTAL_PAD_PAGES << VM_PAD_SHIFT)
 #define VMA_PAD_START(vma)	(vma->vm_end - (vma_pad_pages(vma) << PAGE_SHIFT))
+#include <linux/pgsize_migration_inline.h>
 
 #if PAGE_SIZE == SZ_4K && defined(CONFIG_64BIT)
 extern void vma_set_pad_pages(struct vm_area_struct *vma,
@@ -62,6 +63,11 @@ extern void show_map_pad_vma(struct vm_area_struct *vma,
 
 extern void split_pad_vma(struct vm_area_struct *vma, struct vm_area_struct *new,
 			  unsigned long addr, int new_below);
+
+extern bool is_mergable_pad_vma(struct vm_area_struct *vma,
+				unsigned long vm_flags);
+
+extern unsigned long vma_data_pages(struct vm_area_struct *vma);
 #else /* PAGE_SIZE != SZ_4K || !defined(CONFIG_64BIT) */
 static inline void vma_set_pad_pages(struct vm_area_struct *vma,
 				     unsigned long nr_pages)

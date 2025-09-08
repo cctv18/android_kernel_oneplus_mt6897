@@ -40,13 +40,13 @@ DECLARE_HOOK(android_vh_post_image_save,
 	TP_ARGS(root_swap));
 
 DECLARE_HOOK(android_vh_hibernated_do_mem_alloc,
-        TP_PROTO(unsigned long nr_pages, unsigned int swsusp_header_flags,
-		 int *ret),
-        TP_ARGS(nr_pages, swsusp_header_flags, ret));
+	TP_PROTO(unsigned long nr_pages, unsigned int swsusp_header_flags,
+		int *ret),
+	TP_ARGS(nr_pages, swsusp_header_flags, ret));
 
 DECLARE_HOOK(android_vh_hibernate_save_cmp_len,
-        TP_PROTO(size_t cmp_len),
-        TP_ARGS(cmp_len));
+	TP_PROTO(size_t cmp_len),
+	TP_ARGS(cmp_len));
 
 #endif /* _TRACE_HOOK_BL_HIB_H */
 /* This part must be outside protection */

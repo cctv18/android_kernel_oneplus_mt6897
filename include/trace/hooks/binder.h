@@ -15,7 +15,6 @@ struct binder_transaction_data;
 struct task_struct;
 struct binder_work;
 struct binder_buffer;
-struct rb_node;
 
 DECLARE_HOOK(android_vh_binder_transaction_init,
 	TP_PROTO(struct binder_transaction *t),
@@ -83,7 +82,6 @@ DECLARE_HOOK(android_vh_binder_select_special_worklist,
 DECLARE_HOOK(android_vh_binder_alloc_new_buf_locked,
 	TP_PROTO(size_t size, size_t *free_async_space, int is_async),
 	TP_ARGS(size, free_async_space, is_async));
-
 DECLARE_HOOK(android_vh_binder_detect_low_async_space,
 	TP_PROTO(int is_async, size_t *free_async_space, int pid, bool *should_fail),
 	TP_ARGS(is_async, free_async_space, pid, should_fail));
@@ -149,16 +147,6 @@ DECLARE_HOOK(android_vh_binder_spawn_new_thread,
 DECLARE_HOOK(android_vh_binder_has_special_work_ilocked,
 	TP_PROTO(struct binder_thread *thread, bool do_proc_work, bool *has_work),
 	TP_ARGS(thread, do_proc_work, has_work));
-DECLARE_HOOK(android_vh_binder_find_desc,
-	TP_PROTO(struct binder_proc *proc, uint32_t *ref_desc,
-		struct rb_node *nd_desc, bool *loop),
-	TP_ARGS(proc, ref_desc, nd_desc, loop));
-DECLARE_HOOK(android_vh_binder_set_desc_bit,
-	TP_PROTO(struct binder_proc *proc, uint32_t ref_desc),
-	TP_ARGS(proc, ref_desc));
-DECLARE_HOOK(android_vh_binder_desc_init,
-	TP_PROTO(struct binder_proc *proc),
-	TP_ARGS(proc));
 #endif /* _TRACE_HOOK_BINDER_H */
 /* This part must be outside protection */
 #include <trace/define_trace.h>

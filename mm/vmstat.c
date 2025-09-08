@@ -34,7 +34,6 @@
 #ifdef CONFIG_BLOCKIO_UX_OPT
 extern unsigned long counter, total_us, max_us, min_us, aver_us;
 extern unsigned long restart_time, blk_send_ipi_counter;
-extern unsigned long queue_work_ux;
 static int block_io_stat_show(struct seq_file *m, void *arg)
 {
 	seq_printf(m, "uxio sortirq: total_us = %lu, counter = %lu, "
@@ -42,7 +41,6 @@ static int block_io_stat_show(struct seq_file *m, void *arg)
 			"restart_time = %lu, blk_send_ipi_counter = %lu\n",
 			total_us, counter, max_us, min_us, aver_us,
 				restart_time, blk_send_ipi_counter);
-	seq_printf(m, "kverityd: queue_work_ux = %lu\n", queue_work_ux);
 
 	return 0;
 }
@@ -1814,6 +1812,7 @@ static void zoneinfo_show_print(struct seq_file *m, pg_data_t *pgdat,
 			   zone_page_state(zone, i));
 
 #ifdef CONFIG_NUMA
+	fold_vm_zone_numa_events(zone);
 	for (i = 0; i < NR_VM_NUMA_EVENT_ITEMS; i++)
 		seq_printf(m, "\n      %-12s %lu", numa_stat_name(i),
 			   zone_numa_event_state(zone, i));
