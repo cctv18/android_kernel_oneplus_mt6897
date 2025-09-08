@@ -89,6 +89,10 @@ static struct vfsmount *shm_mnt;
 
 #include "internal.h"
 
+#ifdef CONFIG_MEMFD_ASHMEM_SHIM
+#include "memfd-ashmem-shim.h"
+#endif
+
 #define BLOCKS_PER_PAGE  (PAGE_SIZE/512)
 #define VM_ACCT(size)    (PAGE_ALIGN(size) >> PAGE_SHIFT)
 
@@ -1797,6 +1801,7 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 
 	/* We have to do this with folio locked to prevent races */
 	folio_lock(folio);
+	trace_android_vh_shmem_swapin_folio(folio);
 	if (!folio_test_swapcache(folio) ||
 	    folio_swap_entry(folio).val != swap.val ||
 	    !shmem_confirm_swap(mapping, index, swap)) {
@@ -2319,9 +2324,6 @@ static int shmem_mmap(struct file *file, struct vm_area_struct *vma)
 	ret = seal_check_future_write(info->seals, vma);
 	if (ret)
 		return ret;
-
-	/* arm64 - allow memory tagging on RAM-based files */
-	vm_flags_set(vma, VM_MTE_ALLOWED);
 
 	file_accessed(file);
 	vma->vm_ops = &shmem_vm_ops;
@@ -3985,6 +3987,12 @@ static const struct file_operations shmem_file_operations = {
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= iter_file_splice_write,
 	.fallocate	= shmem_fallocate,
+#endif
+#ifdef CONFIG_MEMFD_ASHMEM_SHIM
+	.unlocked_ioctl	= memfd_ashmem_shim_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= memfd_ashmem_shim_compat_ioctl,
+#endif
 #endif
 };
 

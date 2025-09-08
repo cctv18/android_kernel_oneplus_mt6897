@@ -67,7 +67,8 @@ const char *f2fs_fault_name[FAULT_MAX] = {
 	[FAULT_SLAB_ALLOC]	= "slab alloc",
 	[FAULT_DQUOT_INIT]	= "dquot initialize",
 	[FAULT_LOCK_OP]		= "lock_op",
-	[FAULT_BLKADDR]		= "invalid blkaddr",
+	[FAULT_BLKADDR_VALIDITY]	= "invalid blkaddr",
+	[FAULT_BLKADDR_CONSISTENCE]	= "inconsistent blkaddr",
 #ifdef CONFIG_F2FS_APPBOOST
 	[FAULT_READ_ERROR]    = "appboost read error",
 	[FAULT_WRITE_ERROR]   = "appboost write error",
@@ -90,21 +91,31 @@ const char *f2fs_fault_name[FAULT_MAX] = {
 #endif
 };
 
-void f2fs_build_fault_attr(struct f2fs_sb_info *sbi, unsigned int rate,
+int f2fs_build_fault_attr(struct f2fs_sb_info *sbi, unsigned long rate,
 							unsigned long long type)
 {
 	struct f2fs_fault_info *ffi = &F2FS_OPTION(sbi).fault_info;
 
 	if (rate) {
+		if (rate > INT_MAX)
+			return -EINVAL;
 		atomic_set(&ffi->inject_ops, 0);
-		ffi->inject_rate = rate;
+		ffi->inject_rate = (int)rate;
 	}
 
-	if (type)
-		ffi->inject_type = type;
+	if (type) {
+		if (type >= BIT(FAULT_MAX))
+			return -EINVAL;
+		ffi->inject_type = (unsigned int)type;
+	}
 
 	if (!rate && !type)
 		memset(ffi, 0, sizeof(struct f2fs_fault_info));
+	else
+		f2fs_info(sbi,
+			"build fault injection attr: rate: %lu, type: 0x%llx",
+								rate, type);
+	return 0;
 }
 #endif
 
@@ -573,6 +584,29 @@ static int f2fs_set_test_dummy_encryption(struct super_block *sb,
 }
 
 #ifdef CONFIG_F2FS_FS_COMPRESSION
+static bool is_compress_extension_exist(struct f2fs_sb_info *sbi,
+					const char *new_ext, bool is_ext)
+{
+	unsigned char (*ext)[F2FS_EXTENSION_LEN];
+	int ext_cnt;
+	int i;
+
+	if (is_ext) {
+		ext = F2FS_OPTION(sbi).extensions;
+		ext_cnt = F2FS_OPTION(sbi).compress_ext_cnt;
+	} else {
+		ext = F2FS_OPTION(sbi).noextensions;
+		ext_cnt = F2FS_OPTION(sbi).nocompress_ext_cnt;
+	}
+
+	for (i = 0; i < ext_cnt; i++) {
+		if (!strcasecmp(new_ext, ext[i]))
+			return true;
+	}
+
+	return false;
+}
+
 /*
  * 1. The same extension name cannot not appear in both compress and non-compress extension
  * at the same time.
@@ -615,14 +649,12 @@ static int f2fs_set_lz4hc_level(struct f2fs_sb_info *sbi, const char *str)
 {
 #ifdef CONFIG_F2FS_FS_LZ4HC
 	unsigned int level;
-#endif
 
 	if (strlen(str) == 3) {
 		F2FS_OPTION(sbi).compress_level = 0;
 		return 0;
 	}
 
-#ifdef CONFIG_F2FS_FS_LZ4HC
 	str += 3;
 
 	if (str[0] != ':') {
@@ -640,6 +672,10 @@ static int f2fs_set_lz4hc_level(struct f2fs_sb_info *sbi, const char *str)
 	F2FS_OPTION(sbi).compress_level = level;
 	return 0;
 #else
+	if (strlen(str) == 3) {
+		F2FS_OPTION(sbi).compress_level = 0;
+		return 0;
+	}
 	f2fs_info(sbi, "kernel doesn't support lz4hc compression");
 	return -EINVAL;
 #endif
@@ -649,11 +685,11 @@ static int f2fs_set_lz4hc_level(struct f2fs_sb_info *sbi, const char *str)
 #ifdef CONFIG_F2FS_FS_ZSTD
 static int f2fs_set_zstd_level(struct f2fs_sb_info *sbi, const char *str)
 {
-	unsigned int level;
+	int level;
 	int len = 4;
 
 	if (strlen(str) == len) {
-		F2FS_OPTION(sbi).compress_level = 0;
+		F2FS_OPTION(sbi).compress_level = F2FS_ZSTD_DEFAULT_CLEVEL;
 		return 0;
 	}
 
@@ -663,10 +699,16 @@ static int f2fs_set_zstd_level(struct f2fs_sb_info *sbi, const char *str)
 		f2fs_info(sbi, "wrong format, e.g. <alg_name>:<compr_level>");
 		return -EINVAL;
 	}
-	if (kstrtouint(str + 1, 10, &level))
+	if (kstrtoint(str + 1, 10, &level))
 		return -EINVAL;
 
-	if (!level || level > zstd_max_clevel()) {
+	/* f2fs does not support negative compress level now */
+	if (level < 0) {
+		f2fs_info(sbi, "do not support negative compress level: %d", level);
+		return -ERANGE;
+	}
+
+	if (!f2fs_is_compress_level_valid(COMPRESS_ZSTD, level)) {
 		f2fs_info(sbi, "invalid zstd compress level: %d", level);
 		return -EINVAL;
 	}
@@ -675,23 +717,6 @@ static int f2fs_set_zstd_level(struct f2fs_sb_info *sbi, const char *str)
 	return 0;
 }
 #endif
-
-static int set_extension(unsigned char (*ext)[F2FS_EXTENSION_LEN],
-			int cnt, const char *name)
-{
-	int i;
-
-	for (i = 0; i < cnt; i++) {
-		if (!strcasecmp(ext[i], name))
-			return cnt;
-	}
-
-	if (strlen(name) >= F2FS_EXTENSION_LEN || cnt >= COMPRESS_EXT_NUM)
-		return -EINVAL;
-
-	strcpy(ext[cnt++], name);
-	return cnt;
-}
 #endif
 
 static int parse_options(struct super_block *sb, char *options, bool is_remount)
@@ -769,10 +794,8 @@ static int parse_options(struct super_block *sb, char *options, bool is_remount)
 			clear_opt(sbi, DISCARD);
 			break;
 		case Opt_noheap:
-			set_opt(sbi, NOHEAP);
-			break;
 		case Opt_heap:
-			clear_opt(sbi, NOHEAP);
+			f2fs_warn(sbi, "heap/no_heap options were deprecated");
 			break;
 #ifdef CONFIG_F2FS_FS_XATTR
 		case Opt_user_xattr:
@@ -933,14 +956,17 @@ static int parse_options(struct super_block *sb, char *options, bool is_remount)
 		case Opt_fault_injection:
 			if (args->from && match_int(args, &arg))
 				return -EINVAL;
-			f2fs_build_fault_attr(sbi, arg, F2FS_ALL_FAULT_TYPE);
+			if (f2fs_build_fault_attr(sbi, arg,
+					F2FS_ALL_FAULT_TYPE))
+				return -EINVAL;
 			set_opt(sbi, FAULT_INJECTION);
 			break;
 
 		case Opt_fault_type:
 			if (args->from && match_u64(args, &larg))
 				return -EINVAL;
-			f2fs_build_fault_attr(sbi, 0, larg);
+			if (f2fs_build_fault_attr(sbi, 0, larg))
+				return -EINVAL;
 			set_opt(sbi, FAULT_INJECTION);
 			break;
 #else
@@ -1194,14 +1220,21 @@ static int parse_options(struct super_block *sb, char *options, bool is_remount)
 			ext = F2FS_OPTION(sbi).extensions;
 			ext_cnt = F2FS_OPTION(sbi).compress_ext_cnt;
 
-			ret = set_extension(ext, ext_cnt, name);
-			if (ret < 0) {
-				f2fs_err(sbi, "invalid extension length/number");
+			if (strlen(name) >= F2FS_EXTENSION_LEN ||
+				ext_cnt >= COMPRESS_EXT_NUM) {
+				f2fs_err(sbi,
+					"invalid extension length/number");
 				kfree(name);
-				return ret;
+				return -EINVAL;
 			}
 
-			F2FS_OPTION(sbi).compress_ext_cnt = (unsigned char)ret;
+			if (is_compress_extension_exist(sbi, name, true)) {
+				kfree(name);
+				break;
+			}
+
+			strcpy(ext[ext_cnt], name);
+			F2FS_OPTION(sbi).compress_ext_cnt++;
 			kfree(name);
 			break;
 		case Opt_nocompress_extension:
@@ -1216,14 +1249,21 @@ static int parse_options(struct super_block *sb, char *options, bool is_remount)
 			noext = F2FS_OPTION(sbi).noextensions;
 			noext_cnt = F2FS_OPTION(sbi).nocompress_ext_cnt;
 
-			ret = set_extension(noext, noext_cnt, name);
-			if (ret < 0) {
-				f2fs_err(sbi, "invalid noextension length/number");
+			if (strlen(name) >= F2FS_EXTENSION_LEN ||
+				noext_cnt >= COMPRESS_EXT_NUM) {
+				f2fs_err(sbi,
+					"invalid extension length/number");
 				kfree(name);
-				return ret;
+				return -EINVAL;
 			}
 
-			F2FS_OPTION(sbi).nocompress_ext_cnt = (unsigned char)ret;
+			if (is_compress_extension_exist(sbi, name, false)) {
+				kfree(name);
+				break;
+			}
+
+			strcpy(noext[noext_cnt], name);
+			F2FS_OPTION(sbi).nocompress_ext_cnt++;
 			kfree(name);
 			break;
 		case Opt_compress_chksum:
@@ -1420,7 +1460,7 @@ default_check:
 			return -EINVAL;
 		}
 
-		min_size = MIN_INLINE_XATTR_SIZE;
+		min_size = sizeof(struct f2fs_xattr_header) / sizeof(__le32);
 		max_size = MAX_INLINE_XATTR_SIZE;
 
 		if (F2FS_OPTION(sbi).inline_xattr_size < min_size ||
@@ -1566,6 +1606,10 @@ int f2fs_inode_dirtied(struct inode *inode, bool sync)
 		inc_page_count(sbi, F2FS_DIRTY_IMETA);
 	}
 	spin_unlock(&sbi->inode_lock[DIRTY_META]);
+
+	if (!ret && f2fs_is_atomic_file(inode))
+		set_inode_flag(inode, FI_ATOMIC_DIRTIED);
+
 	return ret;
 }
 
@@ -2018,10 +2062,6 @@ static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 	} else {
 		seq_puts(seq, ",nodiscard");
 	}
-	if (test_opt(sbi, NOHEAP))
-		seq_puts(seq, ",no_heap");
-	else
-		seq_puts(seq, ",heap");
 #ifdef CONFIG_F2FS_FS_XATTR
 	if (test_opt(sbi, XATTR_USER))
 		seq_puts(seq, ",user_xattr");
@@ -2210,7 +2250,6 @@ static void default_options(struct f2fs_sb_info *sbi)
 	set_opt(sbi, INLINE_DATA);
 	set_opt(sbi, INLINE_DENTRY);
 	set_opt(sbi, READ_EXTENT_CACHE);
-	set_opt(sbi, NOHEAP);
 	clear_opt(sbi, DISABLE_CHECKPOINT);
 	set_opt(sbi, MERGE_CHECKPOINT);
 	F2FS_OPTION(sbi).unusable_cap = 0;
@@ -2982,15 +3021,26 @@ static int f2fs_quota_on(struct super_block *sb, int type, int format_id,
 		return -EBUSY;
 	}
 
+	if (path->dentry->d_sb != sb)
+		return -EXDEV;
+
 	err = f2fs_quota_sync(sb, type);
+	if (err)
+		return err;
+
+	inode = d_inode(path->dentry);
+
+	err = filemap_fdatawrite(inode->i_mapping);
+	if (err)
+		return err;
+
+	err = filemap_fdatawait(inode->i_mapping);
 	if (err)
 		return err;
 
 	err = dquot_quota_on(sb, type, format_id, path);
 	if (err)
 		return err;
-
-	inode = d_inode(path->dentry);
 
 	inode_lock(inode);
 	F2FS_I(inode)->i_flags |= F2FS_NOATIME_FL | F2FS_IMMUTABLE_FL;
@@ -3355,6 +3405,14 @@ loff_t max_file_blocks(struct inode *inode)
 	leaf_count *= NIDS_PER_BLOCK;
 	result += leaf_count;
 
+	/*
+	 * For compatibility with FSCRYPT_POLICY_FLAG_IV_INO_LBLK_{64,32} with
+	 * a 4K crypto data unit, we must restrict the max filesize to what can
+	 * fit within U32_MAX + 1 data units.
+	 */
+
+	result = min(result, (((loff_t)U32_MAX + 1) * 4096) >> F2FS_BLKSIZE_BITS);
+
 	return result;
 }
 
@@ -3391,9 +3449,9 @@ static inline bool sanity_check_area_boundary(struct f2fs_sb_info *sbi,
 	u32 segment_count = le32_to_cpu(raw_super->segment_count);
 	u32 log_blocks_per_seg = le32_to_cpu(raw_super->log_blocks_per_seg);
 	u64 main_end_blkaddr = main_blkaddr +
-				(segment_count_main << log_blocks_per_seg);
+				((u64)segment_count_main << log_blocks_per_seg);
 	u64 seg_end_blkaddr = segment0_blkaddr +
-				(segment_count << log_blocks_per_seg);
+				((u64)segment_count << log_blocks_per_seg);
 
 	if (segment0_blkaddr != cp_blkaddr) {
 		f2fs_info(sbi, "Mismatch start address, segment0(%u) cp_blkaddr(%u)",
@@ -3509,7 +3567,7 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 		return -EFSCORRUPTED;
 	}
 
-	/* Currently, support 512/1024/2048/4096 bytes sector size */
+	/* Currently, support 512/1024/2048/4096/16K bytes sector size */
 	if (le32_to_cpu(raw_super->log_sectorsize) >
 				F2FS_MAX_LOG_SECTOR_SIZE ||
 		le32_to_cpu(raw_super->log_sectorsize) <
