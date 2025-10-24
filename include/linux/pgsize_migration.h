@@ -63,11 +63,6 @@ extern void show_map_pad_vma(struct vm_area_struct *vma,
 
 extern void split_pad_vma(struct vm_area_struct *vma, struct vm_area_struct *new,
 			  unsigned long addr, int new_below);
-
-extern bool is_mergable_pad_vma(struct vm_area_struct *vma,
-				unsigned long vm_flags);
-
-extern unsigned long vma_data_pages(struct vm_area_struct *vma);
 #else /* PAGE_SIZE != SZ_4K || !defined(CONFIG_64BIT) */
 static inline void vma_set_pad_pages(struct vm_area_struct *vma,
 				     unsigned long nr_pages)
@@ -109,18 +104,6 @@ static inline void split_pad_vma(struct vm_area_struct *vma, struct vm_area_stru
 static inline unsigned long vma_data_pages(struct vm_area_struct *vma)
 {
 	return vma_pages(vma) - vma_pad_pages(vma);
-}
-
-/*
- * Sets the correct padding bits / flags for a VMA split.
- */
-static inline unsigned long vma_pad_fixup_flags(struct vm_area_struct *vma,
-						unsigned long newflags)
-{
-	if (newflags & VM_PAD_MASK)
-		return (newflags & ~VM_PAD_MASK) | (vma->vm_flags & VM_PAD_MASK);
-	else
-		return newflags;
 }
 
 /*
